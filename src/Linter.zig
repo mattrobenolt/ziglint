@@ -124,6 +124,7 @@ pub fn lint(self: *Linter) void {
     self.checkParseErrors();
     if (self.tree.errors.len > 0) return;
 
+    self.checkLineLength();
     self.checkFileAsStruct();
     self.buildPublicTypesMap();
     self.collectAllIdentifiers();
@@ -1619,6 +1620,54 @@ fn getLineText(self: *Linter, line: usize) []const u8 {
     return self.source[line_start..line_end];
 }
 
+const max_line_length = 120;
+
+fn checkLineLength(self: *Linter) void {
+    var line_num: usize = 0;
+    var line_start: usize = 0;
+
+    for (self.source, 0..) |c, i| {
+        if (c == '\n') {
+            const line_len = i - line_start;
+            if (line_len > max_line_length) {
+                const len_str = std.fmt.allocPrint(self.allocator, "{}", .{line_len}) catch continue;
+                self.allocated_contexts.append(self.allocator, len_str) catch {
+                    self.allocator.free(len_str);
+                    continue;
+                };
+                self.reportLineLength(line_num, len_str);
+            }
+            line_num += 1;
+            line_start = i + 1;
+        }
+    }
+
+    // Check last line if not terminated with newline
+    if (line_start < self.source.len) {
+        const line_len = self.source.len - line_start;
+        if (line_len > max_line_length) {
+            const len_str = std.fmt.allocPrint(self.allocator, "{}", .{line_len}) catch return;
+            self.allocated_contexts.append(self.allocator, len_str) catch {
+                self.allocator.free(len_str);
+                return;
+            };
+            self.reportLineLength(line_num, len_str);
+        }
+    }
+}
+
+fn reportLineLength(self: *Linter, line: usize, context: []const u8) void {
+    if (self.isIgnored(line, .Z024)) return;
+
+    self.diagnostics.append(self.allocator, .{
+        .path = self.path,
+        .line = @intCast(line + 1),
+        .column = @intCast(max_line_length + 1),
+        .rule = .Z024,
+        .context = context,
+    }) catch {};
+}
+
 fn report(self: *Linter, loc: Ast.Location, rule: rules.Rule, context: []const u8) void {
     if (self.isIgnored(loc.line, rule)) return;
 
@@ -3041,4 +3090,44 @@ test "Z023: comptime value before other is bad" {
         if (d.rule == rules.Rule.Z023) found = true;
     }
     try std.testing.expect(found);
+}
+
+test "Z024: detect line exceeding 120 characters" {
+    // Line with 121 characters (11 + 108 + 2)
+    var linter: Linter = .init(std.testing.allocator,
+        "const x = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\";\n"
+    , "test.zig");
+    defer linter.deinit();
+    linter.lint();
+    var found = false;
+    for (linter.diagnostics.items) |d| {
+        if (d.rule == rules.Rule.Z024) found = true;
+    }
+    try std.testing.expect(found);
+}
+
+test "Z024: allow line with exactly 120 characters" {
+    // Line with exactly 120 characters (11 + 107 + 2)
+    var linter: Linter = .init(std.testing.allocator,
+        "const x = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\";\n"
+    , "test.zig");
+    defer linter.deinit();
+    linter.lint();
+    for (linter.diagnostics.items) |d| {
+        if (d.rule == rules.Rule.Z024) {
+            // Should not find Z024 for exactly 120 characters
+            try std.testing.expect(false);
+        }
+    }
+}
+
+test "Z024: allow short line" {
+    var linter: Linter = .init(std.testing.allocator, "const x = 1;\n", "test.zig");
+    defer linter.deinit();
+    linter.lint();
+    for (linter.diagnostics.items) |d| {
+        if (d.rule == rules.Rule.Z024) {
+            try std.testing.expect(false);
+        }
+    }
 }

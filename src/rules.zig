@@ -23,6 +23,7 @@ pub const Rule = enum(u16) {
     Z021 = 21,
     Z022 = 22,
     Z023 = 23,
+    Z024 = 24,
 
     pub fn code(self: Rule) []const u8 {
         return @tagName(self);
@@ -124,6 +125,11 @@ pub const Rule = enum(u16) {
                 const current = context[0..sep];
                 const before = if (sep < context.len) context[sep + 1 ..] else "";
                 try writer.print("{s}'{s}'{s} parameter should come before {s}'{s}'{s}", .{ y, current, r, y, before, r });
+            },
+            // line length exceeds limit
+            // context is the line length as a string
+            .Z024 => {
+                try writer.print("line exceeds {s}120{s} characters ({s}{s}{s} chars)", .{ y, r, y, context, r });
             },
         }
     }
